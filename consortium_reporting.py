@@ -21,7 +21,8 @@ def main():
     consortium_id = os.getenv('CONSORTIUM_ID')
     consortium_pass = os.getenv('CONSORTIUM_PASS')
     test_instance = os.getenv('TEST_INSTANCE')
-    authorization = "Basic " + str(base64.encodebytes(bytes(consortium_id + ":" + consortium_pass, 'utf8')))[2:-3]
+    userpass = consortium_id + ":" + consortium_pass
+    authorization = "Basic {}".format(base64.b64encode(userpass.encode()).decode())
     query_year = os.getenv('YEAR')
     former_members = os.getenv('FORMER_MEMBERS').split(";")
 
