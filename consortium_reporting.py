@@ -67,7 +67,7 @@ def main():
         # Save initial list of DOIs from query year
         page_number = 1
         page_size = 1000
-        consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "created": query_year, "page[number]": str(page_number), "page[size]": str(page_size)})
+        consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "registered": query_year, "page[number]": str(page_number), "page[size]": str(page_size)})
         totalPages = consortium_org_year_dois["meta"]["totalPages"]
         dois_by_org[org["id"]]["annual_total"] = consortium_org_year_dois["meta"]["total"]
 
@@ -77,7 +77,7 @@ def main():
 
         # Extend list of DOIs with subsequent pages
         while page_number <= totalPages:
-            consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "created": query_year, "page[number]": str(page_number), "page[size]": str(page_size)})
+            consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "registered": query_year, "page[number]": str(page_number), "page[size]": str(page_size)})
             dois_by_org[org["id"]]["dois"].extend(consortium_org_year_dois["data"])
             page_number += 1
 
@@ -91,7 +91,7 @@ def main():
         print("Counting DOIs for: " + org)
         # Count how many DOIs the organization minted each month
         for doi in dois_by_org[org]["dois"]:
-            doi_date = dateparser.parse(doi["attributes"]["created"])
+            doi_date = dateparser.parse(doi["attributes"]["registered"])
             dois_by_org[org]["monthly_totals"][str(doi_date.year) + "-" + "{:02d}".format(doi_date.month)] += 1
         # Add the organization's monthly totals to the consortium's
         for month in dois_by_org[org]["monthly_totals"]:
