@@ -5,6 +5,7 @@ from datetime import date
 import csv
 import os
 from dotenv import load_dotenv
+import time
 
 def get_datacite_api_response(authorization, base_url, url_extension, querystring=""):
     # Headers for all API requests
@@ -17,6 +18,7 @@ def get_datacite_api_response(authorization, base_url, url_extension, querystrin
     return response.json()
 
 def main():
+    start = time.time()
     load_dotenv()
     consortium_id = os.getenv('CONSORTIUM_ID')
     consortium_pass = os.getenv('CONSORTIUM_PASS')
@@ -46,10 +48,11 @@ def main():
     dois_by_org = {}
 
     # Get all DOIs from the consortium for the year
+    print("Getting {} DOIs for {}...".format(consortium_id.upper(), query_year))
     for org in org_list:
         if org["id"] in former_members: # Exclude former members
             continue
-        print("Getting DOIs for: " + org["id"])
+        print("- {}".format(org["id"]))
 
         # Get org data
         consortium_org_data = get_datacite_api_response(authorization, base_url, "/providers/" + org["id"])
@@ -77,18 +80,20 @@ def main():
 
         # Extend list of DOIs with subsequent pages
         while page_number <= totalPages:
+            print("- {} (page {} of {})".format(org["id"], page_number, totalPages))
             consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "registered": query_year, "page[number]": str(page_number), "page[size]": str(page_size)})
             dois_by_org[org["id"]]["dois"].extend(consortium_org_year_dois["data"])
             page_number += 1
 
     # Count DOIs from the consortium
+    print("Counting {} DOIs by registration month...".format(consortium_id.upper()))
     consortium_totals = {}
     for month in month_keys:
         consortium_totals[month] = 0
     consortium_totals["annual_total"] = 0
     consortium_totals["cumulative_total"] = 0
     for org in dois_by_org:
-        print("Counting DOIs for: " + org)
+        print("- {}".format(org))
         # Count how many DOIs the organization minted each month
         for doi in dois_by_org[org]["dois"]:
             doi_date = dateparser.parse(doi["attributes"]["registered"])
@@ -102,7 +107,7 @@ def main():
         consortium_totals["cumulative_total"] += dois_by_org[org]["cumulative_total"]
 
     # Write DOI counts to csv file
-    output_filename = str(date.today()) + "_" + consortium_id + "_" + instance_type + "_dois.csv"
+    output_filename = str(date.today()) + "_" + consortium_id.upper() + "_" + instance_type + "_dois.csv"
     with open(output_filename, mode='w') as csv_file:
         fieldnames = ["org_id", "org_name"] + month_keys + ["annual_total", "cumulative_total"]
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
@@ -116,6 +121,10 @@ def main():
         consortium_row = {"org_id": consortium_id.lower(), "org_name": "[All members]"}
         consortium_row.update(consortium_totals)
         writer.writerow(consortium_row)
+
+    end = time.time()
+    duration = end - start
+    print("Total time: {:.0f} minutes {:.2f} seconds".format(duration // 60, duration % 60))
 
 if __name__ == "__main__":
     main()
