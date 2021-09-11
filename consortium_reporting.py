@@ -70,18 +70,24 @@ def main():
         # Save initial list of DOIs from query year
         page_number = 1
         page_size = 1000
-        consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "registered": query_year, "page[number]": str(page_number), "page[size]": str(page_size)})
-        totalPages = consortium_org_year_dois["meta"]["totalPages"]
+        pagination_type = "number"
+        consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "registered": query_year, "page[{}]".format(pagination_type): str(page_number), "page[size]": str(page_size)})
         dois_by_org[org["id"]]["annual_total"] = consortium_org_year_dois["meta"]["total"]
+
+        if dois_by_org[org["id"]]["annual_total"] >= 10000: # use cursor
+            pagination_type = "cursor"
+            consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois",{"provider-id": org["id"], "registered": query_year, "page[{}]".format(pagination_type): str(page_number), "page[size]": str(page_size)})
 
         # Add DOIs to consortium org list
         dois_by_org[org["id"]]["dois"].extend(consortium_org_year_dois["data"])
-        page_number += 1
 
         # Extend list of DOIs with subsequent pages
+        totalPages = consortium_org_year_dois["meta"]["totalPages"]
+        page_number += 1
+
         while page_number <= totalPages:
             print("- {} (page {} of {})".format(org["id"], page_number, totalPages))
-            consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "registered": query_year, "page[number]": str(page_number), "page[size]": str(page_size)})
+            consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "registered": query_year, "page[{}]".format(pagination_type): str(page_number), "page[size]": str(page_size)})
             dois_by_org[org["id"]]["dois"].extend(consortium_org_year_dois["data"])
             page_number += 1
 
@@ -107,7 +113,7 @@ def main():
         consortium_totals["cumulative_total"] += dois_by_org[org]["cumulative_total"]
 
     # Write DOI counts to csv file
-    output_filename = str(date.today()) + "_" + consortium_id.upper() + "_" + instance_type + "_dois.csv"
+    output_filename = str(date.today()) + "_" + consortium_id.upper() + "_" + instance_type + "_dois_" + str(query_year)+ ".csv"
     with open(output_filename, mode='w') as csv_file:
         fieldnames = ["org_id", "org_name"] + month_keys + ["annual_total", "cumulative_total"]
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
