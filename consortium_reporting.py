@@ -56,6 +56,8 @@ def main():
 
         # Get org data
         consortium_org_data = get_datacite_api_response(authorization, base_url, "/providers/" + org["id"])
+        if "data" not in consortium_org_data: # applies for former members
+            continue
         org["data"] = consortium_org_data["data"]
 
         # Set up dict for consortium org
