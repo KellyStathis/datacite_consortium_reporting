@@ -64,23 +64,21 @@ def main():
         url = "https://api.test.datacite.org"
         
     # Set monthly or quarterly breakdown; otherwise will only retrieve the year
-    period_keys = []
+    periods = {}
     period_keys_todate = []
     period_type = os.getenv('PERIOD').lower()
     if period_type == "monthly":
         for month in range (1, 13):
-            period_keys.append("{}-{:02d}".format(year, month))
+            periods[("{}-{:02d}".format(year, month))] = {"start_date": "{}-{:02d}-01".format(year, month),
+                                                          "end_date": "{}-{:02d}-31".format(year, month)}
         del month
-        period_keys_todate = period_keys[0:date.today().month]
+        period_keys_todate = list(periods.keys())[0:date.today().month]
     elif period_type == "quarterly":
-        period_keys = ["Q1", "Q2", "Q3", "Q4"]
-        period_keys_todate = ["Q1"]
-        if date.today().month > 3:
-            period_keys_todate.append("Q2")
-        if date.today().month > 6:
-            period_keys_todate.append("Q3")
-        if date.today().month > 9:
-            period_keys_todate.append("Q4")
+        for quarter in range (1, 5):
+            periods["Q{}".format(quarter)] = {"start_date": "{}-{:02d}-01".format(year, quarter*3 - 2),
+                                              "end_date": "{}-{:02d}-31".format(year, quarter*3)}
+        period_keys_todate = list(periods.keys())[0: ((date.today().month-1)//3) + 1]
+        del quarter
 
     # Get list of consortium orgs
     consortium = get_datacite_api_response(url, "providers", "", {"consortium-id": consortium_id, "page[size]": 200})
@@ -97,7 +95,7 @@ def main():
 
         # Add empty period totals dict to consortium org
         consortium["data"][org_id]["stats"]["period_totals"] = {}
-        for period in period_keys:
+        for period in list(periods.keys()):
             consortium["data"][org_id]["stats"]["period_totals"][period] = 0
     del org_id
 
@@ -122,29 +120,12 @@ def main():
         # get periodic totals for up to 10 consortium orgs per batch
         batch["period"] = {}
         for period in period_keys_todate:
-            if period_type == "monthly":
-                start_date = "{}-01".format(period)
-                end_date = "{}-31".format(period)
-            elif period_type == "quarterly":
-                if period == "Q1":
-                    start_date = "{}{}".format(year, "-01-01")
-                    end_date = "{}{}".format(year, "-03-31")
-                elif period == "Q2":
-                    start_date = "{}{}".format(year, "-04-01")
-                    end_date = "{}{}".format(year, "-06-30")
-                elif period == "Q3":
-                    start_date = "{}{}".format(year, "-07-01")
-                    end_date = "{}{}".format(year, "-09-30")
-                elif period == "Q4":
-                    start_date = "{}{}".format(year, "-10-01")
-                    end_date = "{}{}".format(year, "-12-31")
-
             batch["period"][period] = get_datacite_api_response(url, "dois", "", {"provider-id": batch["provider_ids"],
                                                                                       "registered": year,
                                                                                       "page[size]": 0,
-                                                                                       "query": "registered:[{} TO {}]".format(start_date, end_date)
+                                                                                       "query": "registered:[{} TO {}]".format(periods[period]["start_date"], periods[period]["end_date"])
                                                                                        })
-        del period, start_date, end_date
+        del period
 
         for org_id in batch["org_ids"]:
             consortium["data"][org_id]["stats"]["cumulative_total"] = get_provider_count(batch["cumulative"], org_id)
@@ -160,23 +141,23 @@ def main():
     consortium["stats"] = {}
     consortium["stats"]["annual_total"] = 0
     consortium["stats"]["cumulative_total"] = 0
-    for period in period_keys:
+    for period in list(periods.keys()):
         consortium["stats"][period] = 0
     del period
     for org_id in consortium["data"]:
         # Add the organization's period totals to the consortium's
-        for period in period_keys:
+        for period in list(periods.keys()):
             consortium["stats"][period] += consortium["data"][org_id]["stats"]["period_totals"][period]
         # Add the organization's annual total to the consortium's
         consortium["stats"]["annual_total"] += consortium["data"][org_id]["stats"]["annual_total"]
         # Add the organization's cumulative total to the consortium's
         consortium["stats"]["cumulative_total"] += consortium["data"][org_id]["stats"]["cumulative_total"]
-    del org_id
+    del org_id, period
 
     # Write DOI counts to csv file
     output_filename = "{}_{}_{}_dois_{}_{}.csv".format(date.today(), consortium_id.upper(), instance, year, period_type)
     with open(output_filename, mode='w') as csv_file:
-        fieldnames = ["org_id", "org_name"] + period_keys + ["annual_total", "cumulative_total"]
+        fieldnames = ["org_id", "org_name"] + list(periods.keys()) + ["annual_total", "cumulative_total"]
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         for org_id in consortium["data"]:
