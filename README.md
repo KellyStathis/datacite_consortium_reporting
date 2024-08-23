@@ -1,4 +1,4 @@
-This project exports the number of DOIs registered by a DataCite consortium's consortium organizations per month, for a given year.
+This project exports the number of DOIs registered by a DataCite consortium's consortium organizations per month or quarter for a given year.
 
 ## Configuration
 
