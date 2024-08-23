@@ -83,49 +83,44 @@ def main():
             period_keys_todate.append("Q4")
 
     # Get list of consortium orgs
-    consortium_data = get_datacite_api_response(url, "providers", consortium_id)
+    consortium_data = get_datacite_api_response(url, "providers", "", {"consortium-id": consortium_id, "page[size]": 200})
+    consortium_orgs_dict = {}
+    for org in consortium_data["data"]:
+        consortium_orgs_dict[org["id"]] = org
+    consortium_data["data"] = consortium_orgs_dict
 
     # Get consortium org details
-    consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"] = {}
-    print("Getting {} consortium organizations...".format(consortium_id.upper()))
-    for org in consortium_data["data"]["relationships"]["consortiumOrganizations"]["data"]:
-        # Get consortium org details
-        consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org["id"]] = get_datacite_api_response(url, "providers", org["id"])
-        if "data" not in consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org["id"]]:
-            # remove former consortium orgs (404)
-            former_org_ids.append(org["id"])
-            consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"].pop(org["id"])
-            continue
+    for org_id in consortium_data["data"]:
+        # Set up stats
+        consortium_data["data"][org_id]["stats"] = {}
 
         # Add empty period totals dict to consortium org
-        consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org["id"]]["period_totals"] = {}
+        consortium_data["data"][org_id]["stats"]["period_totals"] = {}
         for period in period_keys:
-            consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org["id"]][
-                "period_totals"][period] = 0
+            consortium_data["data"][org_id]["stats"]["period_totals"][period] = 0
 
     # Get stats for the year by groups of 10 consortium organizations (max returned in facets)
     print("Getting {} DOIs for {}...".format(consortium_id.upper(), year))
-    org_ids = list(consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"].keys())
+    org_ids = list( consortium_data["data"].keys())
     batch_count = (len(org_ids) // 10) + 1
     batch_number = 0
     while batch_number < batch_count:
         batch_org_ids = org_ids[(batch_number * 10):(batch_number * 10)+10]
         batch_provider_ids = ','.join(batch_org_ids)
-        print("Batch {} of {}: {}".format(batch_number, batch_count, batch_provider_ids))
+        print("Batch {} of {}: {}".format(batch_number+1, batch_count, batch_provider_ids))
 
         # get cumulative totals for up to 10 consortium orgs
         batch_response = get_datacite_api_response(url, "dois", "", {"provider-id": batch_provider_ids,
                                                                                      "page[size]": 0})
         for org_id in batch_org_ids:
-            consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org_id]["cumulative_total"] = get_provider_count(batch_response, org_id)
+            consortium_data["data"][org_id]["stats"]["cumulative_total"] = get_provider_count(batch_response, org_id)
 
         # get annual totals for up to 10 consortium orgs
         batch_response = get_datacite_api_response(url, "dois", "", {"provider-id": batch_provider_ids,
                                                                                   "registered": year,
                                                                                   "page[size]": 0})
         for org_id in batch_org_ids:
-            consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org_id][
-                "annual_total"] = get_provider_count(batch_response, org_id)
+            consortium_data["data"][org_id]["stats"]["annual_total"] = get_provider_count(batch_response, org_id)
 
         # get periodic totals for up to 10 consortium orgs per batch
         for period in period_keys_todate:
@@ -152,7 +147,7 @@ def main():
                                                                                        "query": "registered:[{} TO {}]".format(start_date, end_date)
                                                                                        })
             for org_id in batch_org_ids:
-                consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org_id]["period_totals"][period] = get_provider_count(batch_response, org_id)
+                consortium_data["data"][org_id]["stats"]["period_totals"][period] = get_provider_count(batch_response, org_id)
 
         batch_number +=1
 
@@ -163,16 +158,14 @@ def main():
     consortium_data["stats"]["cumulative_total"] = 0
     for period in period_keys:
         consortium_data["stats"][period] = 0
-    for org in consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"]:
-        if org in former_org_ids:
-            continue
+    for org_id in consortium_data["data"]:
         # Add the organization's period totals to the consortium's
         for period in period_keys:
-            consortium_data["stats"][period] += consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["period_totals"][period]
+            consortium_data["stats"][period] += consortium_data["data"][org_id]["stats"]["period_totals"][period]
         # Add the organization's annual total to the consortium's
-        consortium_data["stats"]["annual_total"] += consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["annual_total"]
+        consortium_data["stats"]["annual_total"] += consortium_data["data"][org_id]["stats"]["annual_total"]
         # Add the organization's cumulative total to the consortium's
-        consortium_data["stats"]["cumulative_total"] += consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["cumulative_total"]
+        consortium_data["stats"]["cumulative_total"] += consortium_data["data"][org_id]["stats"]["cumulative_total"]
 
     # Write DOI counts to csv file
     output_filename = "{}_{}_{}_dois_{}_{}.csv".format(date.today(), consortium_id.upper(), instance, year, period_type)
@@ -180,16 +173,11 @@ def main():
         fieldnames = ["org_id", "org_name"] + period_keys + ["annual_total", "cumulative_total"]
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
-        for org in consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"]:
-            if org in former_org_ids:
-                continue
-            try:
-                org_row = {"org_id": org, "org_name": consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["data"]["attributes"]["name"]}
-            except:
-                org_row = {"org_id": org, "org_name": "N/A"}
-            org_row.update(consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["period_totals"])
-            org_row["annual_total"] = consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["annual_total"]
-            org_row["cumulative_total"] = consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["cumulative_total"]
+        for org_id in consortium_data["data"]:
+            org_row = {"org_id": org_id, "org_name": consortium_data["data"][org_id]["attributes"]["name"]}
+            org_row.update(consortium_data["data"][org_id]["stats"]["period_totals"])
+            org_row["annual_total"] = consortium_data["data"][org_id]["stats"]["annual_total"]
+            org_row["cumulative_total"] = consortium_data["data"][org_id]["stats"]["cumulative_total"]
             writer.writerow(org_row)
         consortium_row = {"org_id": consortium_id, "org_name": "All Consortium Organizations"}
         consortium_row.update(consortium_data["stats"])
