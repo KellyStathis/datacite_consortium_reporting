@@ -19,15 +19,13 @@ def get_auth():
         if os.getenv('PRINT_REQUEST').lower() == "true":
             print_request = True
 
-def get_datacite_api_response(url, endpoint, id, params=""):
+def get_datacite_api_response(url, endpoint, params=""):
     # Headers for all API requests
     headers = {
         "accept": "application/vnd.api+json",
     }
 
     request_url = "{}/{}".format(url, endpoint)
-    if id:
-        request_url = "{}/{}/{}".format(url, endpoint, id)
     if print_request:
         print("{}: {}".format(request_url, params))
 
@@ -81,7 +79,7 @@ def main():
         del quarter
 
     # Get list of consortium orgs
-    consortium = get_datacite_api_response(url, "providers", "", {"consortium-id": consortium_id, "page[size]": 200})
+    consortium = get_datacite_api_response(url, "providers", {"consortium-id": consortium_id, "page[size]": 200})
     consortium_orgs_dict = {}
     for org in consortium["data"]:
         consortium_orgs_dict[org["id"]] = org
@@ -111,16 +109,16 @@ def main():
         print("Batch {} of {}: {}".format(batch_number+1, batch_count, batch["provider_ids"]))
 
         # get totals for up to 10 consortium orgs
-        batch["cumulative"] = get_datacite_api_response(url, "dois", "", {"provider-id": batch["provider_ids"],
+        batch["cumulative"] = get_datacite_api_response(url, "dois", {"provider-id": batch["provider_ids"],
                                                                                      "page[size]": 0})
-        batch["annual"] = get_datacite_api_response(url, "dois", "", {"provider-id": batch["provider_ids"],
+        batch["annual"] = get_datacite_api_response(url, "dois", {"provider-id": batch["provider_ids"],
                                                                      "registered": year,
                                                                      "page[size]": 0})
 
         # get periodic totals for up to 10 consortium orgs per batch
         batch["period"] = {}
         for period in period_keys_todate:
-            batch["period"][period] = get_datacite_api_response(url, "dois", "", {"provider-id": batch["provider_ids"],
+            batch["period"][period] = get_datacite_api_response(url, "dois", {"provider-id": batch["provider_ids"],
                                                                                       "registered": year,
                                                                                       "page[size]": 0,
                                                                                        "query": "registered:[{} TO {}]".format(periods[period]["start_date"], periods[period]["end_date"])
