@@ -2,22 +2,24 @@ This project exports the number of DOIs registered by a DataCite consortium's co
 
 ## Configuration
 
-Create an .env file with the consortium's credentials (`CONSORTIUM_ID` and `CONSORTIUM_PASS`). 
-
-Set `TEST_INSTANCE=true` to run using test (api.test.datacite.org). Otherwise, the script will default to the production API (api.datacite.org).
-
-Set `YEAR` to the year from which to pull DOI registration statistics.
-
-Set `FORMER_MEMBERS` to a semicolon-delimited list of consortium organizations to exclude from reporting.
+Create an .env file with:
+- credentials for authentication (`ACCOUNT_ID` and `ACCOUNT_PASS`)
+- the `CONSORTIUM_ID` for the report to retrieve (can be the same as or different from `ACCOUNT_ID`)  
+- set `TEST_INSTANCE=true` to run using the test instance (api.test.datacite.org); otherwise, default is the production instance (api.datacite.org).
+- set `YEAR` to the year from which to pull DOI registration statistics
+- set `PRINT_REQUEST=true` top print each API request (for debugging)
+- set `PERIOD` to `monthly` or `quarterly` to retrieve statistics by month or quarter within the specified year; otherwise, default is yearly
 
 Example .env:
 
 ```
-CONSORTIUM_ID=consortium_example_id
-CONSORTIUM_PASS=consortium_example_pass
+ACCOUNT_ID=abcd
+ACCOUNT_PASS=password
+CONSORTIUM_ID=abcd
 TEST_INSTANCE=false
-YEAR=2021	
-FORMER_MEMBERS=consortiumorg1;consortiumorg2
+YEAR=2024
+PRINT_REQUEST=false
+PERIOD=quarterly
 ```
 
 ## Usage

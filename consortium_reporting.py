@@ -1,138 +1,204 @@
 import requests
-import base64
-import dateparser
 from datetime import date
 import csv
 import os
 from dotenv import load_dotenv
 import time
 
-def get_datacite_api_response(authorization, base_url, url_extension, querystring=""):
+def get_auth():
+    if load_dotenv():
+        account_id = os.getenv('ACCOUNT_ID').lower()
+        account_pass = os.getenv('ACCOUNT_PASS')
+
+        if account_id and account_pass:
+            global basic
+            basic = requests.auth.HTTPBasicAuth(account_id, account_pass)
+
+        global print_request
+        print_request = False
+        if os.getenv('PRINT_REQUEST').lower() == "true":
+            print_request = True
+
+def get_datacite_api_response(url, endpoint, id, params=""):
     # Headers for all API requests
     headers = {
         "accept": "application/vnd.api+json",
-        "authorization": authorization
     }
-    url = base_url + url_extension
-    response = requests.request("GET", url, headers=headers, params=querystring)
+
+    request_url = "{}/{}".format(url, endpoint)
+    if id:
+        request_url = "{}/{}/{}".format(url, endpoint, id)
+    if print_request:
+        print("{}: {}".format(request_url, params))
+
+    response = requests.request("GET", request_url, headers=headers, params=params, auth=basic)
+    global api_request_count
+    api_request_count += 1
     return response.json()
+
+def get_total(response_json):
+    return response_json["meta"]["total"]
+
+def get_provider_count(response_json, provider_id):
+    if "providers" in response_json["meta"]:
+        for provider in response_json["meta"]["providers"]:
+            if provider["id"] == provider_id:
+                return provider["count"]
+    return 0
 
 def main():
     start = time.time()
     load_dotenv()
-    consortium_id = os.getenv('CONSORTIUM_ID')
-    consortium_pass = os.getenv('CONSORTIUM_PASS')
-    test_instance = os.getenv('TEST_INSTANCE')
-    userpass = consortium_id + ":" + consortium_pass
-    authorization = "Basic {}".format(base64.b64encode(userpass.encode()).decode())
-    query_year = os.getenv('YEAR')
-    former_members = os.getenv('FORMER_MEMBERS').split(";")
+    get_auth()
+    global api_request_count
+    api_request_count = 0
+
+    consortium_id = os.getenv('CONSORTIUM_ID').lower()
+    year = os.getenv('YEAR')
+    former_org_ids = []
 
     # Set base url (prod or test)
-    if test_instance and test_instance.lower() == "true":
-        instance_type = "Test"
-        base_url = "https://api.test.datacite.org/"
-    else:
-        instance_type = "Production"
-        base_url = "https://api.datacite.org/"
+    url = "https://api.datacite.org"
+    instance = "Production"
+    if os.getenv('TEST_INSTANCE').lower() == "true":
+        instance = "Test"
+        url = "https://api.test.datacite.org"
+        
+    # Set monthly or quarterly breakdown; otherwise will only retrieve the year
+    period_keys = []
+    period_keys_todate = []
+    period_type = os.getenv('PERIOD').lower()
+    if period_type == "monthly":
+        for period in range (1, 13):
+            period_keys.append("{}-{:02d}".format(year, period))
+        period_keys_todate = period_keys[0:date.today().month]
+    elif period_type == "quarterly":
+        period_keys = ["Q1", "Q2", "Q3", "Q4"]
+        period_keys_todate = ["Q1"]
+        if date.today().month > 3:
+            period_keys_todate.append("Q2")
+        if date.today().month > 6:
+            period_keys_todate.append("Q3")
+        if date.today().month > 9:
+            period_keys_todate.append("Q4")
 
-    month_keys = []
-    for month in range (1, 13):
-        month_keys.append(query_year + "-" + "{:02d}".format(month))
+    # Get list of consortium orgs
+    consortium_data = get_datacite_api_response(url, "providers", consortium_id)
 
-    # Get data for consortium
-    consortium_data = get_datacite_api_response(authorization, base_url, "/providers/" + consortium_id.lower())
-
-    # Grab the list of consortium organizations
-    org_list = consortium_data["data"]["relationships"]["consortiumOrganizations"]["data"]
-    dois_by_org = {}
-
-    # Get all DOIs from the consortium for the year
-    print("Getting {} DOIs for {}...".format(consortium_id.upper(), query_year))
-    for org in org_list:
-        if org["id"] in former_members: # Exclude former members
+    # Get consortium org details
+    consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"] = {}
+    print("Getting {} consortium organizations...".format(consortium_id.upper()))
+    for org in consortium_data["data"]["relationships"]["consortiumOrganizations"]["data"]:
+        # Get consortium org details
+        consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org["id"]] = get_datacite_api_response(url, "providers", org["id"])
+        if "data" not in consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org["id"]]:
+            # remove former consortium orgs (404)
+            former_org_ids.append(org["id"])
+            consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"].pop(org["id"])
             continue
-        print("- {}".format(org["id"]))
 
-        # Get org data
-        consortium_org_data = get_datacite_api_response(authorization, base_url, "/providers/" + org["id"])
-        if "data" not in consortium_org_data: # applies for former members
-            continue
-        org["data"] = consortium_org_data["data"]
+        # Add empty period totals dict to consortium org
+        consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org["id"]]["period_totals"] = {}
+        for period in period_keys:
+            consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org["id"]][
+                "period_totals"][period] = 0
 
-        # Set up dict for consortium org
-        dois_by_org[org["id"]] = {"name": org["data"]["attributes"]["name"], "dois": [], "monthly_totals": {}}
-        for month in month_keys:
-            dois_by_org[org["id"]]["monthly_totals"][month] = 0
+    # Get stats for the year by groups of 10 consortium organizations (max returned in facets)
+    print("Getting {} DOIs for {}...".format(consortium_id.upper(), year))
+    org_ids = list(consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"].keys())
+    batch_count = (len(org_ids) // 10) + 1
+    batch_number = 0
+    while batch_number < batch_count:
+        batch_org_ids = org_ids[(batch_number * 10):(batch_number * 10)+10]
+        batch_provider_ids = ','.join(batch_org_ids)
+        print("Batch {} of {}: {}".format(batch_number, batch_count, batch_provider_ids))
 
-        # Get total count of DOIs across all years
-        consortium_org_all_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"]})
-        dois_by_org[org["id"]]["cumulative_total"] = consortium_org_all_dois["meta"]["total"]
+        # get cumulative totals for up to 10 consortium orgs
+        batch_response = get_datacite_api_response(url, "dois", "", {"provider-id": batch_provider_ids,
+                                                                                     "page[size]": 0})
+        for org_id in batch_org_ids:
+            consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org_id]["cumulative_total"] = get_provider_count(batch_response, org_id)
 
-        # Save initial list of DOIs from query year
-        page_number = 1
-        page_size = 1000
-        pagination_type = "number"
-        consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "registered": query_year, "page[{}]".format(pagination_type): str(page_number), "page[size]": str(page_size)})
-        dois_by_org[org["id"]]["annual_total"] = consortium_org_year_dois["meta"]["total"]
+        # get annual totals for up to 10 consortium orgs
+        batch_response = get_datacite_api_response(url, "dois", "", {"provider-id": batch_provider_ids,
+                                                                                  "registered": year,
+                                                                                  "page[size]": 0})
+        for org_id in batch_org_ids:
+            consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org_id][
+                "annual_total"] = get_provider_count(batch_response, org_id)
 
-        if dois_by_org[org["id"]]["annual_total"] >= 10000: # use cursor
-            pagination_type = "cursor"
-            consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois",{"provider-id": org["id"], "registered": query_year, "page[{}]".format(pagination_type): str(page_number), "page[size]": str(page_size)})
+        # get periodic totals for up to 10 consortium orgs per batch
+        for period in period_keys_todate:
+            if period_type == "monthly":
+                start_date = "{}-01".format(period)
+                end_date = "{}-31".format(period)
+            elif period_type == "quarterly":
+                if period == "Q1":
+                    start_date = "{}{}".format(year, "-01-01")
+                    end_date = "{}{}".format(year, "-03-31")
+                elif period == "Q2":
+                    start_date = "{}{}".format(year, "-04-01")
+                    end_date = "{}{}".format(year, "-06-30")
+                elif period == "Q3":
+                    start_date = "{}{}".format(year, "-07-01")
+                    end_date = "{}{}".format(year, "-09-30")
+                elif period == "Q4":
+                    start_date = "{}{}".format(year, "-10-01")
+                    end_date = "{}{}".format(year, "-12-31")
 
-        # Add DOIs to consortium org list
-        dois_by_org[org["id"]]["dois"].extend(consortium_org_year_dois["data"])
+            batch_response = get_datacite_api_response(url, "dois", "", {"provider-id": batch_provider_ids,
+                                                                                      "registered": year,
+                                                                                      "page[size]": 0,
+                                                                                       "query": "registered:[{} TO {}]".format(start_date, end_date)
+                                                                                       })
+            for org_id in batch_org_ids:
+                consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org_id]["period_totals"][period] = get_provider_count(batch_response, org_id)
 
-        # Extend list of DOIs with subsequent pages
-        totalPages = consortium_org_year_dois["meta"]["totalPages"]
-        page_number += 1
-
-        while page_number <= totalPages:
-            print("- {} (page {} of {})".format(org["id"], page_number, totalPages))
-            consortium_org_year_dois = get_datacite_api_response(authorization, base_url, "/dois", {"provider-id": org["id"], "registered": query_year, "page[{}]".format(pagination_type): str(page_number), "page[size]": str(page_size)})
-            dois_by_org[org["id"]]["dois"].extend(consortium_org_year_dois["data"])
-            page_number += 1
+        batch_number +=1
 
     # Count DOIs from the consortium
-    print("Counting {} DOIs by registration month...".format(consortium_id.upper()))
-    consortium_totals = {}
-    for month in month_keys:
-        consortium_totals[month] = 0
-    consortium_totals["annual_total"] = 0
-    consortium_totals["cumulative_total"] = 0
-    for org in dois_by_org:
-        print("- {}".format(org))
-        # Count how many DOIs the organization minted each month
-        for doi in dois_by_org[org]["dois"]:
-            doi_date = dateparser.parse(doi["attributes"]["registered"])
-            dois_by_org[org]["monthly_totals"][str(doi_date.year) + "-" + "{:02d}".format(doi_date.month)] += 1
-        # Add the organization's monthly totals to the consortium's
-        for month in dois_by_org[org]["monthly_totals"]:
-            consortium_totals[month] += dois_by_org[org]["monthly_totals"][month]
+    print("Counting {} DOIs by registration period...".format(consortium_id.upper()))
+    consortium_data["stats"] = {}
+    consortium_data["stats"]["annual_total"] = 0
+    consortium_data["stats"]["cumulative_total"] = 0
+    for period in period_keys:
+        consortium_data["stats"][period] = 0
+    for org in consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"]:
+        if org in former_org_ids:
+            continue
+        # Add the organization's period totals to the consortium's
+        for period in period_keys:
+            consortium_data["stats"][period] += consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["period_totals"][period]
         # Add the organization's annual total to the consortium's
-        consortium_totals["annual_total"] += dois_by_org[org]["annual_total"]
+        consortium_data["stats"]["annual_total"] += consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["annual_total"]
         # Add the organization's cumulative total to the consortium's
-        consortium_totals["cumulative_total"] += dois_by_org[org]["cumulative_total"]
+        consortium_data["stats"]["cumulative_total"] += consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["cumulative_total"]
 
     # Write DOI counts to csv file
-    output_filename = str(date.today()) + "_" + consortium_id.upper() + "_" + instance_type + "_dois_" + str(query_year)+ ".csv"
+    output_filename = "{}_{}_{}_dois_{}_{}.csv".format(date.today(), consortium_id.upper(), instance, year, period_type)
     with open(output_filename, mode='w') as csv_file:
-        fieldnames = ["org_id", "org_name"] + month_keys + ["annual_total", "cumulative_total"]
+        fieldnames = ["org_id", "org_name"] + period_keys + ["annual_total", "cumulative_total"]
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
-        for org in dois_by_org:
-            org_row = {"org_id": org, "org_name": dois_by_org[org]["name"]}
-            org_row.update(dois_by_org[org]["monthly_totals"])
-            org_row["annual_total"] = dois_by_org[org]["annual_total"]
-            org_row["cumulative_total"] = dois_by_org[org]["cumulative_total"]
+        for org in consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"]:
+            if org in former_org_ids:
+                continue
+            try:
+                org_row = {"org_id": org, "org_name": consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["data"]["attributes"]["name"]}
+            except:
+                org_row = {"org_id": org, "org_name": "N/A"}
+            org_row.update(consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["period_totals"])
+            org_row["annual_total"] = consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["annual_total"]
+            org_row["cumulative_total"] = consortium_data["data"]["relationships"]["consortiumOrganizations"]["details"][org]["cumulative_total"]
             writer.writerow(org_row)
-        consortium_row = {"org_id": consortium_id.lower(), "org_name": "[All members]"}
-        consortium_row.update(consortium_totals)
+        consortium_row = {"org_id": consortium_id, "org_name": "All Consortium Organizations"}
+        consortium_row.update(consortium_data["stats"])
         writer.writerow(consortium_row)
 
     end = time.time()
     duration = end - start
     print("Total time: {:.0f} minutes {:.2f} seconds".format(duration // 60, duration % 60))
+    print("API request count: {}".format(api_request_count))
 
 if __name__ == "__main__":
     main()
